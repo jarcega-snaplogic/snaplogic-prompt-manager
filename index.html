@@ -1,0 +1,1121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>GenAI Pipeline Prompt Manager</title>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/ace.js"></script>
+	<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+	    <div id="loading-spinner" class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-50">
+        <div class="animate-spin rounded-full h-32 w-32 border-t-2 border-b-2 border-blue-500"></div>
+    </div>
+    <div class="top-bar">
+        <span class="app-title">GenAI Pipeline Prompt Manager</span>
+    </div>
+	<div class="app-container">
+		<div class="left-panel">
+			<div class="panel-header">Pipelines</div>
+			<select id="project-dropdown" class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
+				<option value="">Loading projects...</option>
+			</select>
+			<div id="pipeline-list"></div>
+		</div>
+		<div class="center-panel">
+			<div class="panel-header">Prompts</div>
+			<div class="center-panel-content">
+				<div id="prompt-list"></div>
+				<div class="mt-4">
+					<div class="menu-bar">
+						<div class="dropdown">
+							<button class="menu-item">Default Prompts</button>
+							<div class="dropdown-content" id="default-prompts">
+								<!-- Default prompts will be added here dynamically -->
+							</div>
+						</div>
+						<button class="menu-item" onclick="enhancePrompt()">Enhance</button>
+						<button class="menu-item" onclick="prettifyPrompt()">Prettify</button>
+						<button class="menu-item" onclick="autoDocPrompt()">Auto-Doc</button>
+					</div>
+					<textarea id="new-prompt" class="snaplogic-input" rows="4" placeholder="Enter new prompt"></textarea>
+					<textarea id="prompt-comment" class="snaplogic-input mt-2" rows="2" placeholder="Enter comment (optional)"></textarea>
+					<div class="button-group">
+						<button id="add-prompt" class="snaplogic-button">Add Prompt</button>
+						<button id="test-new-prompt" class="snaplogic-button">Test Prompt</button>
+					</div>				</div>
+			</div>
+		</div>
+    </div>
+    <!-- New overlay and test panel -->
+    <div id="overlay" class="overlay"></div>
+    <div id="testPanel" class="test-panel">
+		<div class="test-panel-header">Sandbox</div>
+		<div class="test-panel-content">
+			<div class="test-panel-section">
+				<h3>Model Selection</h3>
+				<select id="llmModel" class="snaplogic-input">
+					<!-- LLM model options will be populated dynamically -->
+				</select>
+			</div>
+			<div class="test-panel-section">
+				<h3>Inputs</h3>
+				<div class="input-toggle">
+					<button id="inputToggle" class="toggle-button">Switch to JSON Payload</button>
+				</div>
+				<div id="inputSets">
+					<div class="input-set">
+						<div id="inputFields"></div>
+						<button class="add-input-set snaplogic-button">+</button>
+					</div>
+				</div>
+				<!-- Add this new div for JSON payload -->
+				<div id="jsonPayload" class="json-payload" style="display: none;">
+					<div class="json-controls">
+						<button id="addJsonInput" class="add-input-set snaplogic-button">+</button>
+						<button id="removeJsonInput" class="add-input-set snaplogic-button">-</button>
+					</div>
+					<div id="jsonEditor" class="json-editor"></div>
+				</div>
+			</div>
+			<div id="answerSection" class="answer-section" style="display: none;">
+				<h3>Answers</h3>
+				<div id="answerContent" class="answer-content"></div>
+			</div>
+		</div>
+		<div class="test-panel-footer">
+			<button id="runTest" class="snaplogic-button">Run Test</button>
+		</div>
+	</div>
+	
+    <script>
+		// Global variables
+		let pipelines = [];
+		let prompts = {};
+		let currentPromptText = '';
+		let jsonEditor;
+		let inputSets = [{}];
+		let isJsonMode = false;
+
+		// DOM elements
+		const overlay = document.getElementById('overlay');
+		const testPanel = document.getElementById('testPanel');
+		const llmModelSelect = document.getElementById('llmModel');
+		const runTestButton = document.getElementById('runTest');
+
+		// Default prompts based on Claude's capabilities
+		const defaultPrompts = [
+			{ label: "General Assistant", prompt: "You are a helpful AI assistant. Provide accurate and helpful information to the user's questions." },
+			{ label: "Creative Writing", prompt: "You are a creative writing assistant. Help the user brainstorm ideas, develop characters, and craft compelling narratives." },
+			{ label: "Code Helper", prompt: "You are a coding assistant. Help the user with programming tasks, explain concepts, and provide code examples when asked." },
+			{ label: "Data Analyst", prompt: "You are a data analysis assistant. Help the user interpret data, suggest analytical approaches, and explain statistical concepts." },
+			{ label: "Language Translator", prompt: "You are a language translation assistant. Translate text between languages accurately, preserving context and nuance." }
+		];
+
+		// LLM model options
+		const llmModels = {
+			'AWS Bedrock': ['Claude 3.5 Sonnet', 'Claude 3 Opus', 'Claude 3 Haiku'],
+			'Azure OpenAI': ['GPT-4', 'GPT-4o', 'GPT-3.5 Turbo'],
+			'Google (WIP)': ['Gemini Ultra', 'Gemini Pro', 'Gemini Flash', 'Gemini Nano'],
+			'Cohere (WIP)': ['Command', 'Command-R'],
+			'Mistral (WIP)': ['Mistral Large', 'Mistral NeMo'],
+			'AI21 (WIP)': ['Jurassic-1 Jumbo', 'Jurassic-1 Grande'],
+		};
+
+		// Initialization
+		document.addEventListener('DOMContentLoaded', function() {
+			showLoadingSpinner();
+			fetchProjectList()
+				.then(() => fetchPipelinesAndPrompts())
+				.then(() => initializeTestFunctionality())
+				.catch(error => console.error("Error during initial load:", error))
+				.finally(() => hideLoadingSpinner());
+		});
+
+		// Event listeners
+		document.getElementById('project-dropdown').addEventListener('change', function() {
+			const selectedProjectPath = this.value;
+			showLoadingSpinner();
+			fetchPipelinesAndPrompts(selectedProjectPath)
+				.finally(() => hideLoadingSpinner());
+		});
+
+		document.getElementById('runTest').addEventListener('click', runTest);
+		
+		overlay.addEventListener('click', closeTestPanel);
+
+		runTestButton.addEventListener('click', function() {
+			let inputData;
+			if (!isJsonMode) {
+				inputData = [];
+				const inputSets = document.getElementById('inputSets');
+				if (inputSets) {
+					inputSets.querySelectorAll('.input-set').forEach(set => {
+						const setData = {};
+						set.querySelectorAll('.input-field').forEach(input => {
+							setData[input.id.replace('input-', '')] = input.value;
+						});
+						inputData.push(setData);
+					});
+				} else {
+					console.error('Input sets container not found');
+					alert('Error: Could not find input fields. Please try again.');
+					return;
+				}
+			} else {
+				try {
+					inputData = JSON.parse(jsonEditor.getValue());
+				} catch (error) {
+					console.error('Error parsing JSON:', error);
+					alert('Invalid JSON. Please check your input.');
+					return;
+				}
+			}
+
+			const selectedModel = llmModelSelect.value;
+			console.log('Running test with model:', selectedModel);
+			console.log('Input data:', inputData);
+			// TODO: Implement the actual test logic here
+		});
+
+		function addJsonInputSet() {
+			try {
+				let jsonData = JSON.parse(jsonEditor.getValue());
+				if (!Array.isArray(jsonData)) {
+					jsonData = [];
+				}
+				const newInputSet = {};
+				if (jsonData.length > 0) {
+					// Copy structure from the last input set
+					Object.keys(jsonData[jsonData.length - 1]).forEach(key => {
+						newInputSet[key] = "";
+					});
+				}
+				jsonData.push(newInputSet);
+				jsonEditor.setValue(JSON.stringify(jsonData, null, 2));
+			} catch (error) {
+				console.error('Error adding JSON input set:', error);
+				alert('Failed to add new input set. Please check the JSON format.');
+			}
+		}
+
+		function removeJsonInputSet() {
+			try {
+				let jsonData = JSON.parse(jsonEditor.getValue());
+				if (Array.isArray(jsonData) && jsonData.length > 1) {
+					jsonData.pop();
+					jsonEditor.setValue(JSON.stringify(jsonData, null, 2));
+				} else {
+					alert('Cannot remove the last input set.');
+				}
+			} catch (error) {
+				console.error('Error removing JSON input set:', error);
+				alert('Failed to remove input set. Please check the JSON format.');
+			}
+		}
+
+		function toggleInputMode() {
+			isJsonMode = !isJsonMode;
+			const toggleButton = document.getElementById('inputToggle');
+			const inputSets = document.getElementById('inputSets');
+			const jsonPayload = document.getElementById('jsonPayload');
+			const jsonControls = document.querySelector('.json-controls');
+			
+			if (isJsonMode) {
+				// Switch to JSON mode
+				inputSets.style.display = 'none';
+				jsonPayload.style.display = 'block';
+				jsonControls.style.display = 'flex';
+				toggleButton.textContent = 'Switch to Input Fields';
+				updateJsonEditor();
+			} else {
+				// Switch to Input Fields mode
+				const success = syncJsonToInputFields();
+				if (success) {
+					inputSets.style.display = 'block';
+					jsonPayload.style.display = 'none';
+					jsonControls.style.display = 'none';
+					toggleButton.textContent = 'Switch to JSON Payload';
+				} else {
+					// If syncing failed, stay in JSON mode
+					isJsonMode = true;
+					alert('Failed to switch to Input Fields. Please check the JSON format.');
+				}
+			}
+		}
+
+		document.getElementById('inputToggle').addEventListener('click', toggleInputMode);
+
+		function runTest() {
+			const apiUrl = "https://emea.snaplogic.com/api/1/rest/slsched/feed/ConnectFasterInc/snapLogic4snapLogic/PromptConsole/testPrompt";
+			const headers = {
+				"Authorization": "Bearer yrWzllNJEw7tuJIH5LMoOsnTisHvIjJG",
+				"Content-Type": "application/json"
+			};
+
+			const selectedModel = document.getElementById('llmModel').value;
+			const promptText = currentPromptText;
+
+			let inputData;
+			if (isJsonMode) {
+				try {
+					inputData = JSON.parse(jsonEditor.getValue());
+				} catch (error) {
+					console.error('Invalid JSON:', error);
+					alert('Invalid JSON. Please check your input.');
+					return;
+				}
+			} else {
+				inputData = Array.from(document.querySelectorAll('.input-set')).map(set => {
+					const setData = {};
+					set.querySelectorAll('.input-field').forEach(input => {
+						setData[input.id.replace('input-', '')] = input.value;
+					});
+					return setData;
+				});
+			}
+
+			showLoadingSpinner();
+
+			Promise.all(inputData.map(data => {
+				let updatedPrompt = promptText;
+				Object.keys(data).forEach(key => {
+					const regex = new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, 'g');
+					updatedPrompt = updatedPrompt.replace(regex, data[key]);
+				});
+
+				const payload = { prompt: updatedPrompt };
+
+				return fetch(`${apiUrl}?model=${encodeURIComponent(selectedModel)}`, {
+					method: 'POST',
+					headers: headers,
+					body: JSON.stringify(payload)
+				})
+				.then(response => {
+					if (!response.ok) {
+						throw new Error(`HTTP error! status: ${response.status}`);
+					}
+					return response.json();
+				});
+			}))
+			.then(results => {
+				displayAnswers(results);
+			})
+			.catch(error => {
+				console.error("Error in running test:", error);
+				alert("An error occurred while running the test. Please try again later.");
+			})
+			.finally(() => {
+				hideLoadingSpinner();
+			});
+		}
+
+		function displayAnswers(answers) {
+			const answerSection = document.getElementById('answerSection');
+			const answerContent = document.getElementById('answerContent');
+			
+			if (answerSection && answerContent) {
+				answerContent.innerHTML = answers.map((answer, index) => `
+					<div class="answer-item">
+						<h4>Result ${index + 1}</h4>
+						<div class="answer-content">${formatAnswerText(answer.answer)}</div>
+					</div>
+				`).join('');
+				answerSection.style.display = 'block';
+				
+				answerSection.scrollIntoView({ behavior: 'smooth' });
+			} else {
+				console.error('Answer section or content element not found');
+			}
+		}
+
+		function formatAnswerText(text) {
+			// Escape HTML to prevent XSS
+			const escapeHtml = (unsafe) => {
+				return unsafe
+					.replace(/&/g, "&amp;")
+					.replace(/</g, "&lt;")
+					.replace(/>/g, "&gt;")
+					.replace(/"/g, "&quot;")
+					.replace(/'/g, "&#039;");
+			};
+
+			// Split the text into lines
+			const lines = text.split('\n');
+
+			let inCodeBlock = false;
+			let codeBlockContent = '';
+
+			// Process each line
+			const formattedLines = lines.map(line => {
+				const trimmedLine = line.trim();
+				
+				// Check for code block delimiters
+				if (trimmedLine.startsWith('```')) {
+					if (inCodeBlock) {
+						// End of code block
+						inCodeBlock = false;
+						const formattedCode = `<pre>${escapeHtml(codeBlockContent.trim())}</pre>`;
+						codeBlockContent = '';
+						return formattedCode;
+					} else {
+						// Start of code block
+						inCodeBlock = true;
+						return '';
+					}
+				}
+
+				if (inCodeBlock) {
+					// Accumulate code block content
+					codeBlockContent += line + '\n';
+					return '';
+				} else {
+					// Regular text line
+					return `<p>${escapeHtml(line)}</p>`;
+				}
+			});
+
+			// Join the formatted lines
+			return formattedLines.join('');
+		}
+
+		// API functions
+		function fetchProjectList() {
+			const apiUrl = "https://emea.snaplogic.com/api/1/rest/slsched/feed/ConnectFasterInc/snapLogic4snapLogic/PromptConsole/getProjectList";
+			const headers = {
+				"Authorization": "Bearer 0YOdA0ETwe7cglJ2DSgGSXGH7qowaMwD"
+			};
+
+			return fetch(apiUrl, { headers })
+				.then(response => response.json())
+				.then(data => {
+					const projectDropdown = document.getElementById('project-dropdown');
+					const projectMap = new Map();
+
+					data.forEach(item => {
+						if (typeof item.path === 'string') {
+							const parts = item.path.split('/');
+							if (parts.length >= 4) {
+								const mainProject = parts[2];
+								const subProject = parts[3];
+								
+								if (!projectMap.has(mainProject)) {
+									projectMap.set(mainProject, new Set());
+								}
+								projectMap.get(mainProject).add(subProject);
+							}
+						}
+					});
+
+					projectDropdown.innerHTML = '<option value="">Select a project</option>';
+					
+					projectMap.forEach((subProjects, mainProject) => {
+						const optgroup = document.createElement('optgroup');
+						optgroup.label = mainProject;
+						
+						subProjects.forEach(subProject => {
+							const option = document.createElement('option');
+							option.value = `/ConnectFasterInc/${mainProject}/${subProject}`;
+							option.textContent = subProject;
+							optgroup.appendChild(option);
+						});
+						
+						projectDropdown.appendChild(optgroup);
+					});
+				})
+				.catch(error => {
+					console.error("Error fetching project list:", error);
+					throw error;
+				});
+		}
+
+		function fetchPipelinesAndPrompts(projectPath = '') {
+			console.log('Fetching pipelines and prompts for project:', projectPath);
+			const apiUrl = "https://emea.snaplogic.com/api/1/rest/slsched/feed/ConnectFasterInc/snapLogic4snapLogic/PromptConsole/getPipelineWithPrompts";
+			const headers = {
+				"Authorization": "Bearer m22rH3vv6kwViJKFddzMJ5JykaKF2BTQ"
+			};
+
+			const params = new URLSearchParams();
+			if (projectPath) {
+				params.append('projectPath', projectPath);
+			}
+
+			return fetch(`${apiUrl}?${params}`, { headers })
+				.then(response => response.json())
+				.then(data => {
+					console.log('Received data:', data);
+					pipelines = data.map(item => ({
+						id: item.path,
+						name: item.name
+					}));
+
+					prompts = {};
+					data.forEach(item => {
+						item.prompts.forEach((prompt, index) => {
+							const pipelineId = item.path;
+							if (!prompts[pipelineId]) {
+								prompts[pipelineId] = [];
+							}
+							prompts[pipelineId].push({
+								id: index + 1,
+								text: prompt,
+								comment: "",
+								version: 1
+							});
+						});
+					});
+
+					console.log('Processed pipelines:', pipelines);
+					console.log('Processed prompts:', prompts);
+
+					renderPipelines();
+					if (pipelines.length > 0) {
+						selectPipeline(pipelines[0], document.querySelector('.pipeline-item'));
+					} else {
+						document.getElementById('prompt-list').innerHTML = '<p>No pipelines available for this project.</p>';
+					}
+					
+					// Reset the sandbox panel when changing projects
+					resetSandboxPanel();
+				})
+				.catch(error => {
+					console.error("Error fetching pipelines and prompts:", error);
+					// Display error message to the user
+					document.getElementById('prompt-list').innerHTML = '<p>Error loading pipelines and prompts. Please try again later.</p>';
+				});
+		}
+
+		function enhancePrompt() {
+			const promptText = document.getElementById('new-prompt').value.trim();
+			if (!promptText) {
+				alert("Please enter a prompt before enhancing.");
+				return;
+			}
+
+			const apiUrl = "https://emea.snaplogic.com/api/1/rest/slsched/feed/ConnectFasterInc/snapLogic4snapLogic/PromptConsole/enhance";
+			const headers = {
+				"Authorization": "Bearer J8Sfe7WPE23hlQJA2UTjmbkg3cBVTzy0",
+				"Content-Type": "application/json"
+			};
+
+			const payload = JSON.stringify({ prompt: promptText });
+
+			fetch(apiUrl, {
+				method: 'POST',
+				headers: headers,
+				body: payload
+			})
+			.then(response => {
+				if (!response.ok) {
+					throw new Error(`HTTP error! status: ${response.status}`);
+				}
+				return response.json();
+			})
+			.then(data => {
+				if (data.prompt) {
+					document.getElementById('new-prompt').value = data.prompt;
+				} else {
+					throw new Error("Enhanced prompt not found in the response");
+				}
+			})
+			.catch(error => {
+				console.error("Error in enhancing prompt:", error);
+				alert("An error occurred while enhancing the prompt. Please try again later.");
+			});
+		}
+
+		function autoDocPrompt() {
+			const promptText = document.getElementById('new-prompt').value.trim();
+			if (!promptText) {
+				alert("Please enter a prompt before using Auto-Doc.");
+				return;
+			}
+
+			const apiUrl = "https://emea.snaplogic.com/api/1/rest/slsched/feed/ConnectFasterInc/snapLogic4snapLogic/PromptConsole/autoDoc";
+			const headers = {
+				"Authorization": "Bearer 9ULoEozxlmryGsrF8wOhUW91DarJU47a",
+				"Content-Type": "application/json"
+			};
+
+			const payload = JSON.stringify({ prompt: promptText });
+
+			fetch(apiUrl, {
+				method: 'POST',
+				headers: headers,
+				body: payload
+			})
+			.then(response => {
+				if (!response.ok) {
+					throw new Error(`HTTP error! status: ${response.status}`);
+				}
+				return response.json();
+			})
+			.then(data => {
+				if (data.documentation) {
+					document.getElementById('prompt-comment').value = data.documentation;
+				} else {
+					throw new Error("Documentation not found in the response");
+				}
+			})
+			.catch(error => {
+				console.error("Error in Auto-Doc:", error);
+				alert("An error occurred while generating documentation. Please try again later.");
+			});
+		}
+
+		// UI manipulation functions
+		function showLoadingSpinner() {
+			document.getElementById('loading-spinner').style.display = 'flex';
+		}
+
+		function hideLoadingSpinner() {
+			document.getElementById('loading-spinner').style.display = 'none';
+		}
+
+		function renderPipelines() {
+			const pipelineList = document.getElementById('pipeline-list');
+			pipelineList.innerHTML = '';
+
+			pipelines.forEach(pipeline => {
+				const item = document.createElement('div');
+				item.className = 'pipeline-item';
+				item.textContent = pipeline.name;
+				item.dataset.pipelineId = pipeline.id;
+				item.addEventListener('click', () => selectPipeline(pipeline, item));
+				pipelineList.appendChild(item);
+			});
+		}
+
+		function selectPipeline(pipeline, selectedItem) {
+			document.querySelectorAll('.pipeline-item').forEach(item => item.classList.remove('active'));
+			selectedItem.classList.add('active');
+			renderPrompts(pipeline);
+			resetInputForm();
+		}
+
+		function renderPrompts(pipeline) {
+			const promptList = document.getElementById('prompt-list');
+			promptList.innerHTML = '';
+
+			if (prompts[pipeline.id] && prompts[pipeline.id].length > 0) {
+				prompts[pipeline.id].forEach(prompt => {
+					const promptElement = document.createElement('div');
+					promptElement.className = 'prompt-item';
+					promptElement.innerHTML = `
+						<div class="prompt-text">${formatText(prompt.text)}</div>
+						<div class="prompt-comment">${formatText(prompt.comment || 'No comment')}</div>
+						<p class="prompt-version">Version: ${prompt.version}</p>
+						<div class="button-group">
+							<button class="edit-button" data-prompt-id="${prompt.id}">Edit Prompt</button>
+							<button class="test-button" data-prompt-id="${prompt.id}">Test Prompt</button>
+						</div>
+					`;
+					promptList.appendChild(promptElement);
+				});
+			} else {
+				promptList.innerHTML = '<p class="text-gray-600">No prompts available for this pipeline. Add a new one below.</p>';
+			}
+
+			document.getElementById('add-prompt').onclick = () => addPrompt(pipeline.id);
+			document.querySelectorAll('.edit-button').forEach(button => {
+				button.onclick = () => editPrompt(pipeline.id, button.getAttribute('data-prompt-id'));
+			});
+			document.querySelectorAll('.test-button').forEach(button => {
+				button.onclick = () => {
+					const promptId = button.getAttribute('data-prompt-id');
+					const promptText = prompts[pipeline.id].find(p => p.id === parseInt(promptId)).text;
+					openTestPanel(promptText);
+				};
+			});
+		}
+
+		function resetInputForm() {
+			document.getElementById('new-prompt').value = '';
+			document.getElementById('prompt-comment').value = '';
+			document.getElementById('add-prompt').textContent = 'Add Prompt';
+			document.getElementById('add-prompt').onclick = () => addPrompt(getCurrentPipelineId());
+			
+			const cancelButton = document.getElementById('cancel-edit');
+			if (cancelButton) {
+				cancelButton.style.display = 'none';
+			}
+		}
+
+		function openTestPanel(promptText) {
+			currentPromptText = promptText;
+			overlay.style.display = 'block';
+			testPanel.classList.add('open');
+			const tags = extractMustacheTags(promptText);
+			
+			createInputFields(tags);
+			initializeJsonEditor(tags);
+			isJsonMode = false; // Reset to input fields mode
+			
+			const inputToggle = document.getElementById('inputToggle');
+			if (inputToggle) {
+				inputToggle.textContent = 'Switch to JSON Payload';
+			}
+			
+			const inputSets = document.getElementById('inputSets');
+			const jsonPayload = document.getElementById('jsonPayload');
+			const jsonControls = document.querySelector('.json-controls');
+			
+			if (inputSets) inputSets.style.display = 'block';
+			if (jsonPayload) jsonPayload.style.display = 'none';
+			if (jsonControls) jsonControls.style.display = 'none';
+			
+			// Clear the previous answer
+			const answerSection = document.getElementById('answerSection');
+			const answerContent = document.getElementById('answerContent');
+			if (answerSection && answerContent) {
+				answerSection.style.display = 'none';
+				answerContent.innerHTML = '';
+			}
+		}
+
+		function closeTestPanel() {
+			console.log('Closing test panel');
+			const testPanel = document.getElementById('testPanel');
+			const overlay = document.getElementById('overlay');
+			if (testPanel && overlay) {
+				testPanel.classList.remove('open');
+				overlay.style.display = 'none';
+			}
+			// We don't call resetSandboxPanel() here anymore
+		}
+
+		function showInputFields() {
+			document.getElementById('inputFields').style.display = 'block';
+			document.getElementById('jsonPayload').style.display = 'none';
+		}
+
+		function showJsonPayload() {
+			document.getElementById('inputFields').style.display = 'none';
+			document.getElementById('jsonPayload').style.display = 'block';
+			syncInputFieldsToJson();
+		}
+
+		// Prompt manipulation functions
+		function addPrompt(pipelineId) {
+			const newPromptText = document.getElementById('new-prompt').value.trim();
+			const newPromptComment = document.getElementById('prompt-comment').value.trim();
+
+			if (newPromptText) {
+				if (!prompts[pipelineId]) {
+					prompts[pipelineId] = [];
+				}
+
+				const newPrompt = {
+					id: prompts[pipelineId].length + 1,
+					text: newPromptText,
+					comment: newPromptComment,
+					version: 1
+				};
+
+				prompts[pipelineId].push(newPrompt);
+
+				document.getElementById('new-prompt').value = '';
+				document.getElementById('prompt-comment').value = '';
+
+				const pipeline = pipelines.find(p => p.id === pipelineId);
+				renderPrompts(pipeline);
+			}
+		}
+
+		function editPrompt(pipelineId, promptId) {
+			const prompt = prompts[pipelineId].find(p => p.id === parseInt(promptId));
+			if (prompt) {
+				document.getElementById('new-prompt').value = prompt.text;
+				document.getElementById('prompt-comment').value = prompt.comment;
+
+				document.getElementById('add-prompt').textContent = 'Update Prompt';
+				document.getElementById('add-prompt').onclick = () => updatePrompt(pipelineId, promptId);
+
+				// Add or show cancel button
+				let cancelButton = document.getElementById('cancel-edit');
+				if (!cancelButton) {
+					cancelButton = document.createElement('button');
+					cancelButton.id = 'cancel-edit';
+					cancelButton.textContent = 'Cancel';
+					cancelButton.className = 'snaplogic-button';
+					cancelButton.onclick = resetInputForm;
+					document.querySelector('.button-group').appendChild(cancelButton);
+				} else {
+					cancelButton.style.display = 'inline-block';
+				}
+			}
+		}
+
+		function updatePrompt(pipelineId, promptId) {
+			const updatedPromptText = document.getElementById('new-prompt').value.trim();
+			const updatedPromptComment = document.getElementById('prompt-comment').value.trim();
+
+			if (updatedPromptText) {
+				const promptIndex = prompts[pipelineId].findIndex(p => p.id === parseInt(promptId));
+				if (promptIndex !== -1) {
+					prompts[pipelineId][promptIndex].text = updatedPromptText;
+					prompts[pipelineId][promptIndex].comment = updatedPromptComment;
+					prompts[pipelineId][promptIndex].version++;
+
+					resetInputForm();
+					renderPrompts({ id: pipelineId, name: pipelines.find(p => p.id === pipelineId).name });
+				}
+			}
+		}
+
+		function prettifyPrompt() {
+			const promptText = document.getElementById('new-prompt').value.trim();
+			if (!promptText) {
+				alert("Please enter a prompt before prettifying.");
+				return;
+			}
+
+			const apiUrl = "https://emea.snaplogic.com/api/1/rest/slsched/feed/ConnectFasterInc/snapLogic4snapLogic/PromptConsole/prettify";
+			const headers = {
+				"Authorization": "Bearer RwnUcPfTng3oduWBItM6ciwK98adqGuM",
+				"Content-Type": "application/json"
+			};
+
+			const payload = JSON.stringify({ prompt: promptText });
+
+			showLoadingSpinner();
+
+			fetch(apiUrl, {
+				method: 'POST',
+				headers: headers,
+				body: payload
+			})
+			.then(response => {
+				if (!response.ok) {
+					throw new Error(`HTTP error! status: ${response.status}`);
+				}
+				return response.json();
+			})
+			.then(data => {
+				if (data.prompt) {
+					document.getElementById('new-prompt').value = data.prompt;
+				} else {
+					throw new Error("Prettified prompt not found in the response");
+				}
+			})
+			.catch(error => {
+				console.error("Error in prettifying prompt:", error);
+				alert("An error occurred while prettifying the prompt. Please try again later.");
+			})
+			.finally(() => {
+				hideLoadingSpinner();
+			});
+		}
+
+		function generateInitialJson(tags) {
+			const initialJson = [{}];
+			tags.forEach(tag => initialJson[0][tag] = "");
+			return JSON.stringify(initialJson, null, 2);
+		}
+
+		// Utility functions
+		function getCurrentPipelineId() {
+			const activePipeline = document.querySelector('.pipeline-item.active');
+			return activePipeline ? activePipeline.dataset.pipelineId : null;
+		}
+
+		function formatText(text) {
+			// Replace newlines with <br> tags
+			text = text.replace(/\n/g, '<br>');
+			
+			// Replace multiple consecutive <br> tags with a paragraph break
+			text = text.replace(/(<br>\s*){2,}/g, '</p><p>');
+			
+			// Wrap the text in a paragraph tag
+			text = '<p>' + text + '</p>';
+			
+			return text;
+		}
+
+		function extractMustacheTags(promptText) {
+			const regex = /\{\{([^}]+)\}\}/g;
+			const tags = [];
+			let match;
+			while ((match = regex.exec(promptText)) !== null) {
+				tags.push(match[1].trim());
+			}
+			return [...new Set(tags)]; // Remove duplicates
+		}
+
+		function createInputFields(tags) {
+			const inputSets = document.getElementById('inputSets');
+			if (!inputSets) {
+				console.error('Input sets container not found');
+				return;
+			}
+
+			inputSets.innerHTML = ''; // Clear existing input sets
+
+			const inputSet = document.createElement('div');
+			inputSet.className = 'input-set';
+
+			tags.forEach(tag => {
+				const inputGroup = document.createElement('div');
+				inputGroup.className = 'input-group';
+
+				const label = document.createElement('label');
+				label.textContent = tag;
+				inputGroup.appendChild(label);
+
+				const input = document.createElement('input');
+				input.type = 'text';
+				input.id = `input-${tag}`;
+				input.className = 'input-field';
+				inputGroup.appendChild(input);
+
+				inputSet.appendChild(inputGroup);
+			});
+
+			const addButton = document.createElement('button');
+			addButton.className = 'add-input-set snaplogic-button';
+			addButton.textContent = '+';
+			addButton.onclick = addInputSet;
+			inputSet.appendChild(addButton);
+
+			inputSets.appendChild(inputSet);
+		}
+		
+		function resetSandboxPanel() {
+			console.log('Resetting sandbox panel');
+			
+			const tags = extractMustacheTags(currentPromptText);
+			
+			createInputFields(tags);
+			
+			// Reset JSON editor
+			if (jsonEditor) {
+				jsonEditor.setValue(generateInitialJson(tags));
+			}
+			
+			// Reset the toggle button
+			const toggleButton = document.getElementById('inputToggle');
+			if (toggleButton) {
+				toggleButton.textContent = 'Switch to JSON Payload';
+			}
+			isJsonMode = false;
+			
+			// Hide JSON controls
+			const jsonControls = document.querySelector('.json-controls');
+			if (jsonControls) {
+				jsonControls.style.display = 'none';
+			}
+			
+			// Show input fields, hide JSON payload
+			const inputSets = document.getElementById('inputSets');
+			const jsonPayload = document.getElementById('jsonPayload');
+			if (inputSets) inputSets.style.display = 'block';
+			if (jsonPayload) jsonPayload.style.display = 'none';
+			
+			// Clear the previous answer
+			const answerSection = document.getElementById('answerSection');
+			const answerContent = document.getElementById('answerContent');
+			if (answerSection && answerContent) {
+				answerSection.style.display = 'none';
+				answerContent.innerHTML = '';
+			}
+
+			// Close the test panel if it's open
+			const testPanel = document.getElementById('testPanel');
+			const overlay = document.getElementById('overlay');
+			if (testPanel && testPanel.classList.contains('open')) {
+				testPanel.classList.remove('open');
+				if (overlay) overlay.style.display = 'none';
+			}
+		}
+
+		function addInputSet() {
+			const inputSets = document.getElementById('inputSets');
+			const newSet = inputSets.children[0].cloneNode(true);
+			newSet.querySelectorAll('input').forEach(input => input.value = '');
+			const addButton = newSet.querySelector('.add-input-set');
+			addButton.textContent = '-';
+			addButton.onclick = () => removeInputSet(newSet);
+			inputSets.appendChild(newSet);
+		}
+
+		function removeInputSet(set) {
+			const inputSets = document.getElementById('inputSets');
+			if (inputSets.children.length > 1) {
+				set.parentNode.removeChild(set);
+			} else {
+				alert('Cannot remove the last input set.');
+			}
+		}
+
+		function updateJsonEditor() {
+			if (!jsonEditor) {
+				console.error('JSON editor not initialized');
+				return;
+			}
+
+			const inputSets = document.querySelectorAll('.input-set');
+			const jsonData = Array.from(inputSets).map(set => {
+				const setData = {};
+				set.querySelectorAll('.input-field').forEach(input => {
+					setData[input.id.replace('input-', '')] = input.value;
+				});
+				return setData;
+			});
+			jsonEditor.setValue(JSON.stringify(jsonData, null, 2));
+		}
+
+		function syncJsonToInputFields() {
+			try {
+				let jsonData;
+				if (jsonEditor && typeof jsonEditor.getValue === 'function') {
+					jsonData = JSON.parse(jsonEditor.getValue());
+				} else {
+					console.error('JSON editor not initialized');
+					return false;
+				}
+
+				if (!Array.isArray(jsonData)) {
+					throw new Error('JSON data is not an array');
+				}
+
+				const inputSets = document.getElementById('inputSets');
+				inputSets.innerHTML = ''; // Clear existing input sets
+				
+				jsonData.forEach((setData, index) => {
+					const newSet = document.createElement('div');
+					newSet.className = 'input-set';
+					
+					// Create input fields based on the JSON data
+					Object.keys(setData).forEach(key => {
+						const inputGroup = document.createElement('div');
+						inputGroup.className = 'input-group';
+						
+						const label = document.createElement('label');
+						label.textContent = key;
+						inputGroup.appendChild(label);
+						
+						const input = document.createElement('input');
+						input.type = 'text';
+						input.id = `input-${key}`;
+						input.className = 'input-field';
+						input.value = setData[key];
+						inputGroup.appendChild(input);
+						
+						newSet.appendChild(inputGroup);
+					});
+					
+					const addRemoveButton = document.createElement('button');
+					addRemoveButton.className = 'add-input-set snaplogic-button';
+					if (index === 0) {
+						addRemoveButton.textContent = '+';
+						addRemoveButton.onclick = addInputSet;
+					} else {
+						addRemoveButton.textContent = '-';
+						addRemoveButton.onclick = () => removeInputSet(newSet);
+					}
+					newSet.appendChild(addRemoveButton);
+					
+					inputSets.appendChild(newSet);
+				});
+				return true;
+			} catch (error) {
+				console.error('Error syncing JSON to input fields:', error);
+				return false;
+			}
+		}
+
+		function initializeJsonEditor(tags) {
+			if (!jsonEditor) {
+				jsonEditor = ace.edit("jsonEditor");
+				jsonEditor.setTheme("ace/theme/monokai");
+				jsonEditor.session.setMode("ace/mode/json");
+			}
+
+			jsonEditor.setValue(generateInitialJson(tags));
+		}
+
+		/* function syncInputFieldsToJson() {
+			const jsonData = {};
+			document.querySelectorAll('#inputFields .input-group').forEach(group => {
+				const input = group.querySelector('input');
+				jsonData[input.id.replace('input-', '')] = input.value;
+			});
+			jsonEditor.setValue(JSON.stringify(jsonData, null, 2));
+		} */
+
+		function syncInputFieldsToJson() {
+			updateJsonEditor();
+		}
+
+		function prettifyText(text) {
+			// 1. Normalize line endings
+			text = text.replace(/\r\n/g, '\n');
+
+			// 2. Implement numbered lists
+			text = text.replace(/^(\d+)\.\s/gm, (match, number) => `${number}. `);
+
+			// 3. Add blank lines before specific terms
+			text = text.replace(/(^|\n)(Question:|Context:|Example:|Answer:)/g, '\n\n$2');
+
+			// 4. Incorporate line breaks after sentences, ignoring JSON content
+			text = text.replace(/([.!?])\s+(?![^{]*})/g, '$1\n');
+
+			// 5. Use consistent formatting (ensure consistent indentation)
+			text = text.replace(/^\s+/gm, '');  // Remove leading spaces
+
+			// 6. Remove excess blank lines (more than two consecutive newlines)
+			text = text.replace(/\n{3,}/g, '\n\n');
+
+			return text.trim();  // Remove leading/trailing whitespace
+		}
+
+		// Initialization functions
+		function initializeTestFunctionality() {
+			populateLLMModelDropdown();
+			document.getElementById('test-new-prompt').onclick = () => openTestPanel(document.getElementById('new-prompt').value);
+			document.querySelector('.add-input-set').onclick = addInputSet;
+			document.getElementById('addJsonInput').addEventListener('click', addJsonInputSet);
+			document.getElementById('removeJsonInput').addEventListener('click', removeJsonInputSet);
+			document.getElementById('inputToggle').addEventListener('click', toggleInputMode);
+			document.getElementById('runTest').addEventListener('click', runTest);
+		}
+
+		function populateLLMModelDropdown() {
+			llmModelSelect.innerHTML = '';
+			for (const [vendor, models] of Object.entries(llmModels)) {
+				const optgroup = document.createElement('optgroup');
+				optgroup.label = vendor;
+				for (const model of models) {
+					const option = document.createElement('option');
+					option.value = `${vendor}:${model}`;
+					option.textContent = model;
+					if (vendor === 'AWS Bedrock' && model === 'Claude 3.5 Sonnet') {
+						option.selected = true;
+					}
+					optgroup.appendChild(option);
+				}
+				llmModelSelect.appendChild(optgroup);
+			}
+		}
+
+		function populateDefaultPrompts() {
+			const defaultPromptsContainer = document.getElementById('default-prompts');
+			defaultPrompts.forEach(item => {
+				const link = document.createElement('a');
+				link.href = '#';
+				link.textContent = item.label;
+				link.onclick = (e) => {
+					e.preventDefault();
+					document.getElementById('new-prompt').value = item.prompt;
+				};
+				defaultPromptsContainer.appendChild(link);
+			});
+		}
+
+		// Initial setup
+		populateDefaultPrompts();
+    </script>
+</body>
+</html>
